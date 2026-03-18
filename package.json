@@ -1,0 +1,28 @@
+{
+  "name": "tmdb-mcp-server",
+  "version": "1.0.0",
+  "description": "Production-ready TMDB MCP Server for Cloudflare Workers",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "hono": "^4.6.16",
+    "zod": "^3.24.1"
+  },
+  "optionalDependencies": {
+    "@cloudflare/workers-types": "^4.20241205.0",
+    "wrangler": "^3.99.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
