@@ -20,14 +20,54 @@ export interface TMDBErrorResponse {
   status_message: string;
 }
 
+function describeNetworkError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return 'Unknown error';
+  }
+
+  const cause = error.cause;
+  if (cause && typeof cause === 'object') {
+    const code = 'code' in cause ? String((cause as { code?: unknown }).code) : undefined;
+    const message = 'message' in cause ? String((cause as { message?: unknown }).message) : undefined;
+    const nestedErrors = 'errors' in cause ? (cause as { errors?: unknown[] }).errors : undefined;
+    const nestedMessage = Array.isArray(nestedErrors) && nestedErrors[0] instanceof Error
+      ? nestedErrors[0].message
+      : undefined;
+
+    if (code && message) {
+      return `${error.message} (${code}: ${message})`;
+    }
+    if (message && nestedMessage && message !== nestedMessage) {
+      return `${error.message} (${message}; ${nestedMessage})`;
+    }
+    if (message) {
+      return `${error.message} (${message})`;
+    }
+    if (nestedMessage) {
+      return `${error.message} (${nestedMessage})`;
+    }
+  }
+
+  return error.message;
+}
+
 // Cloudflare Workers global types
 declare const caches: {
   open(cacheName: string): Promise<Cache>;
 };
 
 interface Cache {
-  match(request: string | object): Promise<object | undefined>;
-  put(request: string | object, response: object): Promise<void>;
+  match(request: string | object): Promise<Response | undefined>;
+  put(request: string | object, response: Response): Promise<void>;
+}
+
+interface Response {
+  clone(): Response;
+  json(): Promise<unknown>;
+  ok?: boolean;
+  status?: number;
+  statusText?: string;
+  headers?: { get?: (name: string) => string | null };
 }
 
 // Global URLSearchParams for Cloudflare Workers
@@ -372,7 +412,7 @@ export class TMDBClient {
       try {
         const cachedResponse = await this.cache.match(cacheKey);
         if (cachedResponse) {
-          const cachedData = await (cachedResponse as { json: <T>() => Promise<T> }).json<T>();
+          const cachedData = await cachedResponse.clone().json() as T;
           return cachedData;
         }
       } catch {
@@ -393,7 +433,7 @@ export class TMDBClient {
       });
     } catch (error) {
       throw new TMDBError(
-        `Network error: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        `Network error: ${describeNetworkError(error)}`,
         0
       );
     }
@@ -428,16 +468,12 @@ export class TMDBClient {
     }
 
     // Parse the response
-    const data = await (response as { json: <T>() => Promise<T> }).json<T>();
+    const data = await (response as { clone: () => Response }).clone().json() as T;
 
     // Cache the response
     if (useCache && this.cache) {
       try {
-        const cacheResponse = {
-          json: () => Promise.resolve(data),
-          headers: new Map([['Content-Type', 'application/json']]),
-        } as object;
-        await this.cache.put(cacheKey, cacheResponse);
+        await this.cache.put(cacheKey, (response as Response).clone());
       } catch {
         // Ignore cache errors
       }
@@ -574,6 +610,24 @@ export class TMDBClient {
     return this.fetch<TMDBSearchResponse<TMDBMovie | TMDBTVShow | TMDBPerson>>(
       `/trending/${mediaType}/${timeWindow}`
     );
+  }
+
+  /**
+   * Get account-level TMDB configuration for images and change keys.
+   */
+  async getConfiguration(): Promise<{
+    images: {
+      base_url: string;
+      secure_base_url: string;
+      backdrop_sizes: string[];
+      logo_sizes: string[];
+      poster_sizes: string[];
+      profile_sizes: string[];
+      still_sizes: string[];
+    };
+    change_keys: string[];
+  }> {
+    return this.fetch('/configuration', {}, { useCache: false });
   }
 
   /**
@@ -955,14 +1009,14 @@ export class TMDBClient {
   /**
    * Get certifications for movies.
    */
-  async getMovieCertifications(): Promise<{ results: Array<{ iso_3166_1: string; certification: string; meaning: string; order: number }> }> {
+  async getMovieCertifications(): Promise<{ results: Record<string, Array<{ certification: string; meaning: string; order: number }>> }> {
     return this.fetch('/certification/movie/list');
   }
 
   /**
    * Get certifications for TV shows.
    */
-  async getTVCertifications(): Promise<{ results: Array<{ iso_3166_1: string; certification: string; meaning: string; order: number }> }> {
+  async getTVCertifications(): Promise<{ results: Record<string, Array<{ certification: string; meaning: string; order: number }>> }> {
     return this.fetch('/certification/tv/list');
   }
 }

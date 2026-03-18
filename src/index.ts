@@ -9,6 +9,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { TMDBClient } from './lib/tmdb-client.js';
 import { TOOLS } from './lib/mcp-tools.js';
+import { zodSchemaToJsonSchema } from './lib/json-schema.js';
 
 // Cloudflare Workers global types
 declare const TextEncoder: { new(): { encode(input: string): Uint8Array } };
@@ -34,9 +35,15 @@ export interface Env {
   TMDB_IMAGE_BASE_URL: string;
 }
 
+const SERVER_INFO = {
+  name: 'tmdb-mcp-server',
+  version: '1.0.0',
+};
+
 // Global state
 const state = {
   client: null as TMDBClient | null,
+  clientConfigKey: null as string | null,
   sessions: new Map<string, { id: string; createdAt: number }>(),
 };
 
@@ -47,8 +54,26 @@ function initializeClient(env: Env): TMDBClient {
     baseUrl: env.TMDB_BASE_URL || 'https://api.themoviedb.org/3',
     imageBaseUrl: env.TMDB_IMAGE_BASE_URL || 'https://image.tmdb.org/t/p',
   });
-  client.initializeCache();
+  void client.initializeCache();
   return client;
+}
+
+function getClientConfigKey(env: Env): string {
+  return JSON.stringify({
+    apiKey: env.TMDB_API_KEY,
+    baseUrl: env.TMDB_BASE_URL || 'https://api.themoviedb.org/3',
+    imageBaseUrl: env.TMDB_IMAGE_BASE_URL || 'https://image.tmdb.org/t/p',
+  });
+}
+
+function getClient(env: Env): TMDBClient {
+  const configKey = getClientConfigKey(env);
+  if (!state.client || state.clientConfigKey !== configKey) {
+    state.client = initializeClient(env);
+    state.clientConfigKey = configKey;
+  }
+
+  return state.client;
 }
 
 // Generate unique ID
@@ -65,8 +90,7 @@ app.use('*', cors());
 // Root endpoint
 app.get('/', (c) => {
   return c.json({
-    name: 'tmdb-mcp-server',
-    version: '1.0.0',
+    ...SERVER_INFO,
     status: 'running',
     tools_count: TOOLS.length,
   });
@@ -77,7 +101,7 @@ app.get('/health', (c) => {
   return c.json({
     status: 'healthy',
     timestamp: new Date().toISOString(),
-    version: '1.0.0',
+    version: SERVER_INFO.version,
     tools_count: TOOLS.length,
   });
 });
@@ -98,9 +122,7 @@ app.get('/sse', async (c) => {
   }
 
   // Initialize client
-  if (!state.client) {
-    state.client = initializeClient(c.env);
-  }
+  getClient(c.env);
 
   // Create session
   const sessionId = generateId();
@@ -153,9 +175,7 @@ app.post('/message', async (c) => {
   }
 
   // Initialize client if needed
-  if (!state.client) {
-    state.client = initializeClient(c.env);
-  }
+  const client = getClient(c.env);
 
   const sessionId = c.req.query('sessionId');
   if (!sessionId) {
@@ -188,7 +208,7 @@ app.post('/message', async (c) => {
           },
           serverInfo: {
             name: 'tmdb-mcp-server',
-            version: '1.0.0',
+            version: SERVER_INFO.version,
           },
         },
       });
@@ -226,7 +246,7 @@ app.post('/message', async (c) => {
       }
 
       try {
-        const result = await tool.handler(state.client, params.arguments || {});
+        const result = await tool.handler(client, params.arguments || {});
         return c.json({
           jsonrpc: '2.0',
           id: message.id,
@@ -271,9 +291,7 @@ app.post('/mcp', async (c) => {
     return c.json({ error: 'TMDB_API_KEY not configured' }, { status: 500 });
   }
 
-  if (!state.client) {
-    state.client = initializeClient(c.env);
-  }
+  const client = getClient(c.env);
 
   try {
     const body = await c.req.json();
@@ -296,7 +314,7 @@ app.post('/mcp', async (c) => {
           },
           serverInfo: {
             name: 'tmdb-mcp-server',
-            version: '1.0.0',
+            version: SERVER_INFO.version,
           },
         },
       });
@@ -329,7 +347,7 @@ app.post('/mcp', async (c) => {
       }
 
       try {
-        const result = await tool.handler(state.client, params.arguments || {});
+        const result = await tool.handler(client, params.arguments || {});
         return c.json({
           jsonrpc: '2.0',
           id: message.id,
@@ -369,8 +387,7 @@ app.post('/mcp', async (c) => {
 // GET /mcp for capabilities
 app.get('/mcp', (c) => {
   return c.json({
-    name: 'tmdb-mcp-server',
-    version: '1.0.0',
+    ...SERVER_INFO,
     protocolVersion: '2024-11-05',
     capabilities: {
       tools: {},
@@ -389,65 +406,5 @@ app.onError((err, c) => {
     { status: 500 }
   );
 });
-
-// Simple Zod to JSON Schema converter
-function zodSchemaToJsonSchema(schema: unknown): Record<string, unknown> {
-  if (schema && typeof schema === 'object' && '_def' in schema) {
-    const zodSchema = schema as Record<string, unknown>;
-    const def = zodSchema._def as Record<string, unknown>;
-
-    if (def.typeName === 'ZodObject') {
-      const shape = def.shape as Record<string, unknown>;
-      const properties: Record<string, unknown> = {};
-      const required: string[] = [];
-
-      for (const [key, value] of Object.entries(shape)) {
-        const fieldDef = value as Record<string, unknown>;
-        const fieldTypeDef = fieldDef._def as Record<string, unknown>;
-
-        let type = 'string';
-        if (fieldTypeDef.typeName === 'ZodNumber') {
-          type = 'number';
-        } else if (fieldTypeDef.typeName === 'ZodBoolean') {
-          type = 'boolean';
-        } else if (fieldTypeDef.typeName === 'ZodEnum') {
-          type = 'string';
-        }
-
-        const description = fieldDef.description as string | undefined;
-        let enumValues: string[] | undefined;
-        if (fieldTypeDef.typeName === 'ZodEnum') {
-          enumValues = fieldTypeDef.values as string[];
-        }
-
-        const isOptional =
-          fieldTypeDef.typeName === 'ZodOptional' || fieldTypeDef.typeName === 'ZodDefault';
-
-        properties[key] = {
-          type,
-          ...(description && { description }),
-          ...(enumValues && { enum: enumValues }),
-        };
-
-        if (!isOptional) {
-          required.push(key);
-        }
-      }
-
-      return {
-        type: 'object',
-        properties,
-        required,
-        additionalProperties: false,
-      };
-    }
-  }
-
-  return {
-    type: 'object',
-    properties: {},
-    additionalProperties: true,
-  };
-}
 
 export default app;
