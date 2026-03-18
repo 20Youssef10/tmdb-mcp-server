@@ -6,40 +6,17 @@
  * 
  * Usage: 
  * 1. Create a .dev.vars file with your TMDB_API_KEY
- * 2. Run: node --experimental-strip-types test.ts
+ * 2. Run: npx tsx test.ts
  */
 
+import { formatConnectivityError, getTMDBApiKey } from './test-support/env.js';
 import { TMDBClient } from './src/lib/tmdb-client.js';
 
-// Load environment variables from .dev.vars
-async function loadEnvVars(): Promise<Record<string, string>> {
-  try {
-    const fs = await import('fs');
-    const content = fs.readFileSync('.dev.vars', 'utf-8');
-    const env: Record<string, string> = {};
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (trimmed && !trimmed.startsWith('#')) {
-        const [key, ...valueParts] = trimmed.split('=');
-        if (key && valueParts.length > 0) {
-          env[key.trim()] = valueParts.join('=').trim();
-        }
-      }
-    }
-    return env;
-  } catch {
-    console.error('Error: Could not load .dev.vars file');
-    console.error('Please create a .dev.vars file with your TMDB_API_KEY');
-    process.exit(1);
-  }
-}
-
 async function runTests() {
-  const env = await loadEnvVars();
-  const apiKey = env.TMDB_API_KEY;
+  const apiKey = await getTMDBApiKey();
 
   if (!apiKey || apiKey === 'your_tmdb_api_key_here') {
-    console.error('Error: Please set a valid TMDB_API_KEY in .dev.vars');
+    console.error('Error: Please set a valid TMDB_API_KEY in .dev.vars or the environment');
     process.exit(1);
   }
 
@@ -50,6 +27,14 @@ async function runTests() {
   });
 
   console.log('🎬 TMDB MCP Server - Test Suite\n');
+  try {
+    const configuration = await client.getConfiguration();
+    console.log(`Preflight OK: TMDB image host ${configuration.images.secure_base_url}`);
+  } catch (error) {
+    console.error(`Preflight failed: ${formatConnectivityError(error)}`);
+    process.exit(1);
+  }
+
   console.log('================================\n');
 
   const tests = [
@@ -66,10 +51,10 @@ async function runTests() {
     {
       name: 'get_movie_details',
       fn: async () => {
-        const result = await client.getMovieDetails(603); // The Matrix
+        const result = await client.getMovieDetails(603);
         console.log(`✅ Got details for: ${result.title}`);
         console.log(`   Runtime: ${result.runtime} min`);
-        console.log(`   Cast: ${result.credits.cast.slice(0, 3).map(c => c.name).join(', ')}`);
+        console.log(`   Cast: ${result.credits.cast.slice(0, 3).map((c) => c.name).join(', ')}`);
       },
     },
     {
@@ -85,7 +70,7 @@ async function runTests() {
     {
       name: 'get_tv_details',
       fn: async () => {
-        const result = await client.getTVShowDetails(1396); // Breaking Bad
+        const result = await client.getTVShowDetails(1396);
         console.log(`✅ Got details for: ${result.name}`);
         console.log(`   Seasons: ${result.number_of_seasons}`);
         console.log(`   Episodes: ${result.number_of_episodes}`);
@@ -104,7 +89,7 @@ async function runTests() {
     {
       name: 'get_person_details',
       fn: async () => {
-        const result = await client.getPersonDetails(31); // Tom Hanks
+        const result = await client.getPersonDetails(31);
         console.log(`✅ Got details for: ${result.name}`);
         console.log(`   Known for: ${result.known_for_department}`);
         console.log(`   Filmography: ${result.credits.cast.length} acting credits`);
@@ -114,7 +99,7 @@ async function runTests() {
       name: 'discover_movies',
       fn: async () => {
         const result = await client.discoverMovies({
-          with_genres: '28', // Action
+          with_genres: '28',
           'vote_average.gte': 7,
           sort_by: 'popularity.desc',
         });
@@ -144,9 +129,9 @@ async function runTests() {
     process.stdout.write(`Testing ${test.name}... `);
     try {
       await test.fn();
-      passed++;
+      passed += 1;
     } catch (error) {
-      failed++;
+      failed += 1;
       console.error('❌ FAILED');
       console.error(`   Error: ${error instanceof Error ? error.message : String(error)}`);
     }

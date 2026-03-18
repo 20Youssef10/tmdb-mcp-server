@@ -4,7 +4,7 @@ A production-ready Model Context Protocol (MCP) server that integrates with The 
 
 ## Features
 
-- **36 MCP Tools** for comprehensive TMDB API access
+- **34 MCP Tools** for comprehensive TMDB API access
 - **Dual Transport Support**: SSE (legacy) and Streamable HTTP (new standard)
 - **Cloudflare Cache** integration for improved performance
 - **Robust Error Handling** with graceful error messages
@@ -111,6 +111,17 @@ npm run dev
 The server will be available at `http://localhost:8787`
 
 ### 4. Test Endpoints
+
+**Offline test suite:**
+```bash
+npm test
+```
+
+**Live integration tests (require `TMDB_API_KEY` and outbound access to `api.themoviedb.org`):**
+```bash
+npm run test:endpoints
+npm run test:integration
+```
 
 **Health Check:**
 ```bash
