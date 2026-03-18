@@ -4,7 +4,7 @@ A production-ready Model Context Protocol (MCP) server that integrates with The 
 
 ## Features
 
-- **36 MCP Tools** for comprehensive TMDB API access
+- **42 MCP Tools** for comprehensive TMDB API access
 - **Dual Transport Support**: SSE (legacy) and Streamable HTTP (new standard)
 - **Cloudflare Cache** integration for improved performance
 - **Robust Error Handling** with graceful error messages
@@ -22,6 +22,7 @@ A production-ready Model Context Protocol (MCP) server that integrates with The 
 | `discover_movies` | Advanced movie discovery with filters |
 | `discover_tv` | Advanced TV show discovery with filters |
 | `get_trending` | Get trending movies, TV shows, or people |
+| `multi_search` | Search movies, TV shows, and people in one request |
 
 ### Movie Details
 | Tool | Description |
@@ -32,6 +33,8 @@ A production-ready Model Context Protocol (MCP) server that integrates with The 
 | `get_movie_videos` | Get all videos (trailers, teasers, clips) for a movie |
 | `get_movie_images` | Get all images (posters, backdrops, logos) for a movie |
 | `get_movie_reviews` | Get user reviews for a movie |
+| `get_movie_watch_providers` | Get streaming, rental, and purchase providers for a movie |
+| `get_movie_external_ids` | Get external IDs and deep links for a movie |
 
 ### TV Show Details
 | Tool | Description |
@@ -44,12 +47,15 @@ A production-ready Model Context Protocol (MCP) server that integrates with The 
 | `get_tv_reviews` | Get user reviews for a TV show |
 | `get_season_details` | Get detailed information about a TV show season |
 | `get_episode_details` | Get detailed information about a TV show episode |
+| `get_tv_watch_providers` | Get streaming, rental, and purchase providers for a TV show |
+| `get_tv_external_ids` | Get external IDs and deep links for a TV show |
 
 ### Person Details
 | Tool | Description |
 |------|-------------|
 | `get_person_details` | Get person biography and filmography |
 | `get_person_images` | Get all profile images for a person |
+| `get_person_external_ids` | Get external and social IDs for a person |
 
 ### Lists & Charts
 | Tool | Description |
@@ -70,6 +76,8 @@ A production-ready Model Context Protocol (MCP) server that integrates with The 
 |------|-------------|
 | `get_movie_certifications` | Get movie certifications by country |
 | `get_tv_certifications` | Get TV show certifications by country |
+| `get_movie_genres` | Get the reference list of movie genres and IDs |
+| `get_tv_genres` | Get the reference list of TV genres and IDs |
 
 ## Prerequisites
 
@@ -111,6 +119,17 @@ npm run dev
 The server will be available at `http://localhost:8787`
 
 ### 4. Test Endpoints
+
+**Offline test suite:**
+```bash
+npm test
+```
+
+**Live integration tests (require `TMDB_API_KEY` and outbound access to `api.themoviedb.org`):**
+```bash
+npm run test:endpoints
+npm run test:integration
+```
 
 **Health Check:**
 ```bash

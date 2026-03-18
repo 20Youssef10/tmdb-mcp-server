@@ -1,15 +1,21 @@
 /**
- * Comprehensive Test Script for All 36 TMDB MCP Tools
+ * Comprehensive Test Script for All 42 TMDB MCP Tools
  * 
  * Usage: npx tsx test-all-tools.ts
  */
 
+import { formatConnectivityError, getTMDBApiKey } from './test-support/env.js';
 import { TMDBClient } from './src/lib/tmdb-client.js';
 
-const API_KEY = 'ba11756866d006ff2acec5ce3efab273';
+const apiKey = await getTMDBApiKey();
+
+if (!apiKey) {
+  console.error('TMDB_API_KEY is required to run the live integration suite.');
+  process.exit(1);
+}
 
 const client = new TMDBClient({
-  apiKey: API_KEY,
+  apiKey,
   baseUrl: 'https://api.themoviedb.org/3',
   imageBaseUrl: 'https://image.tmdb.org/t/p',
 });
@@ -20,13 +26,12 @@ interface Test {
 }
 
 const tests: Test[] = [
-  // Core Tools
   { name: 'search_movies', fn: async () => {
     const r = await client.searchMovies('Inception');
     console.log(`✅ ${r.results.length} results, top: ${r.results[0]?.title}`);
   }},
   { name: 'get_movie_details', fn: async () => {
-    const r = await client.getMovieDetails(27205); // Inception
+    const r = await client.getMovieDetails(27205);
     console.log(`✅ ${r.title}, ${r.runtime}min, ${r.credits.cast.length} cast`);
   }},
   { name: 'search_tv_shows', fn: async () => {
@@ -34,7 +39,7 @@ const tests: Test[] = [
     console.log(`✅ ${r.results.length} results, top: ${r.results[0]?.name}`);
   }},
   { name: 'get_tv_details', fn: async () => {
-    const r = await client.getTVShowDetails(1399); // Game of Thrones
+    const r = await client.getTVShowDetails(1399);
     console.log(`✅ ${r.name}, ${r.number_of_seasons} seasons, ${r.number_of_episodes} episodes`);
   }},
   { name: 'search_person', fn: async () => {
@@ -42,7 +47,7 @@ const tests: Test[] = [
     console.log(`✅ ${r.results.length} results, top: ${r.results[0]?.name}`);
   }},
   { name: 'get_person_details', fn: async () => {
-    const r = await client.getPersonDetails(6193); // DiCaprio
+    const r = await client.getPersonDetails(6193);
     console.log(`✅ ${r.name}, ${r.credits.cast.length} credits`);
   }},
   { name: 'discover_movies', fn: async () => {
@@ -53,10 +58,12 @@ const tests: Test[] = [
     const r = await client.getTrending('movie', 'week');
     console.log(`✅ ${r.results.length} trending movies`);
   }},
-  
-  // Movie Tools
+  { name: 'multi_search', fn: async () => {
+    const r = await client.multiSearch('The Matrix');
+    console.log(`✅ ${r.results.length} mixed results`);
+  }},
   { name: 'get_movie_recommendations', fn: async () => {
-    const r = await client.getMovieRecommendations(27205); // Inception
+    const r = await client.getMovieRecommendations(27205);
     console.log(`✅ ${r.results.length} recommendations`);
   }},
   { name: 'get_similar_movies', fn: async () => {
@@ -95,8 +102,14 @@ const tests: Test[] = [
     const r = await client.getLatestMovie();
     console.log(`✅ Latest: ${r.title}`);
   }},
-  
-  // TV Tools
+  { name: 'get_movie_watch_providers', fn: async () => {
+    const r = await client.getMovieWatchProviders(27205);
+    console.log(`✅ ${Object.keys(r.results).length} regional provider entries`);
+  }},
+  { name: 'get_movie_external_ids', fn: async () => {
+    const r = await client.getMovieExternalIds(27205);
+    console.log(`✅ IMDb: ${r.imdb_id}`);
+  }},
   { name: 'get_tv_recommendations', fn: async () => {
     const r = await client.getTVRecommendations(1399);
     console.log(`✅ ${r.results.length} recommendations`);
@@ -145,34 +158,57 @@ const tests: Test[] = [
     const r = await client.getLatestTV();
     console.log(`✅ Latest TV: ${r.name}`);
   }},
-  
-  // Person Tools
+  { name: 'get_tv_watch_providers', fn: async () => {
+    const r = await client.getTVWatchProviders(1399);
+    console.log(`✅ ${Object.keys(r.results).length} regional provider entries`);
+  }},
+  { name: 'get_tv_external_ids', fn: async () => {
+    const r = await client.getTVExternalIds(1399);
+    console.log(`✅ IMDb: ${r.imdb_id}`);
+  }},
   { name: 'get_person_images', fn: async () => {
     const r = await client.getPersonImages(6193);
     console.log(`✅ ${r.profiles.length} profile images`);
   }},
-  
-  // Discovery & Reference
+  { name: 'get_person_external_ids', fn: async () => {
+    const r = await client.getPersonExternalIds(6193);
+    console.log(`✅ IMDb: ${r.imdb_id}`);
+  }},
   { name: 'discover_tv', fn: async () => {
     const r = await client.discoverTVShows({ with_genres: '18', sort_by: 'popularity.desc' });
     console.log(`✅ ${r.results.length} drama TV shows`);
   }},
   { name: 'get_movie_certifications', fn: async () => {
     const r = await client.getMovieCertifications();
-    const count = Array.isArray(r.results) ? r.results.length : Object.keys(r).length;
-    console.log(`✅ ${count} countries with certifications`);
+    console.log(`✅ ${Object.keys(r.results).length} countries with certifications`);
   }},
   { name: 'get_tv_certifications', fn: async () => {
     const r = await client.getTVCertifications();
-    const count = Array.isArray(r.results) ? r.results.length : Object.keys(r).length;
-    console.log(`✅ ${count} countries with TV certifications`);
+    console.log(`✅ ${Object.keys(r.results).length} countries with TV certifications`);
+  }},
+  { name: 'get_movie_genres', fn: async () => {
+    const r = await client.getGenres('movie');
+    console.log(`✅ ${r.genres.length} movie genres`);
+  }},
+  { name: 'get_tv_genres', fn: async () => {
+    const r = await client.getGenres('tv');
+    console.log(`✅ ${r.genres.length} TV genres`);
   }},
 ];
 
 async function runTests() {
-  console.log('🎬 TMDB MCP Server - Full Test Suite (36 Tools)\n');
+  console.log('🎬 TMDB MCP Server - Full Test Suite (42 Tools)\n');
   console.log('='.repeat(50));
-  
+
+  try {
+    const configuration = await client.getConfiguration();
+    console.log(`Preflight OK: TMDB image host ${configuration.images.secure_base_url}`);
+  } catch (error) {
+    console.error(`Preflight failed: ${formatConnectivityError(error)}`);
+    console.error('Unable to verify the TMDB tools from this environment even though an API key was supplied.');
+    process.exit(1);
+  }
+
   let passed = 0;
   let failed = 0;
   const failures: string[] = [];
@@ -181,25 +217,28 @@ async function runTests() {
     process.stdout.write(`Testing ${test.name}... `);
     try {
       await test.fn();
-      passed++;
+      passed += 1;
     } catch (error) {
-      failed++;
+      failed += 1;
       failures.push(`${test.name}: ${error instanceof Error ? error.message : String(error)}`);
       console.log('❌ FAILED');
     }
   }
-  
+
   console.log('='.repeat(50));
   console.log(`Results: ${passed}/${tests.length} passed, ${failed} failed`);
-  
+
   if (failures.length > 0) {
     console.log('\nFailures:');
-    failures.forEach(f => console.log(`  - ${f}`));
+    failures.forEach((failure) => console.log(`  - ${failure}`));
   }
-  
+
   if (failed > 0) {
     process.exit(1);
   }
 }
 
-runTests().catch(console.error);
+runTests().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

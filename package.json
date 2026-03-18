@@ -7,7 +7,11 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "build": "tsc --noEmit",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts",
+    "test:integration": "tsx test.ts",
+    "test:endpoints": "tsx test-endpoints.ts",
+    "test:all-tools": "tsx test-all-tools.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

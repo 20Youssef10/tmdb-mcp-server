@@ -94,6 +94,37 @@ export const getTrendingSchema = z.object({
   time_window: z.enum(['day', 'week']).optional().default('week').describe('Time window for trending'),
 });
 
+export const multiSearchSchema = z.object({
+  query: z.string().min(1, 'Search query cannot be empty').describe('Search text to use across movies, TV shows, and people'),
+  page: z.number().int().min(1).optional().default(1).describe('Page number for pagination'),
+  language: z.string().optional().default('en-US').describe('Language code (e.g., en-US, es-ES)'),
+  include_adult: z.boolean().optional().default(false).describe('Whether to include adult titles in results'),
+});
+
+export const mediaIdSchema = z.object({
+  movie_id: z.number().int().positive('Movie ID must be a positive integer').describe('The TMDB movie ID'),
+});
+
+export const tvIdSchema = z.object({
+  tv_id: z.number().int().positive('TV Show ID must be a positive integer').describe('The TMDB TV show ID'),
+});
+
+export const personIdSchema = z.object({
+  person_id: z.number().int().positive('Person ID must be a positive integer').describe('The TMDB person ID'),
+});
+
+export const watchProviderRegionSchema = z.object({
+  region: z.string().length(2).optional().describe('Optional ISO 3166-1 country code such as US or GB'),
+});
+
+export const getMovieWatchProvidersSchema = mediaIdSchema.extend(watchProviderRegionSchema.shape);
+export const getTVWatchProvidersSchema = tvIdSchema.extend(watchProviderRegionSchema.shape);
+export const getMovieExternalIdsSchema = mediaIdSchema;
+export const getTVExternalIdsSchema = tvIdSchema;
+export const getPersonExternalIdsSchema = personIdSchema;
+export const getMovieGenresSchema = z.object({});
+export const getTVGenresSchema = z.object({});
+
 // ============================================================================
 // Tool Handlers
 // ============================================================================
@@ -120,6 +151,64 @@ function createSuccessResponse(data: unknown): ToolResult {
   return {
     content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
   };
+}
+
+function getImageBaseUrl(): string {
+  return (globalThis as unknown as { TMDB_IMAGE_BASE_URL?: string }).TMDB_IMAGE_BASE_URL || 'https://image.tmdb.org/t/p';
+}
+
+function buildExternalLinks(externalIds: Record<string, string | number | null>): Record<string, string> {
+  const links: Record<string, string> = {};
+  const imdbId = typeof externalIds.imdb_id === 'string' ? externalIds.imdb_id : null;
+  const wikidataId = typeof externalIds.wikidata_id === 'string' ? externalIds.wikidata_id : null;
+  const facebookId = typeof externalIds.facebook_id === 'string' ? externalIds.facebook_id : null;
+  const instagramId = typeof externalIds.instagram_id === 'string' ? externalIds.instagram_id : null;
+  const twitterId = typeof externalIds.twitter_id === 'string' ? externalIds.twitter_id : null;
+  const tiktokId = typeof externalIds.tiktok_id === 'string' ? externalIds.tiktok_id : null;
+  const youtubeId = typeof externalIds.youtube_id === 'string' ? externalIds.youtube_id : null;
+
+  if (imdbId) {
+    const imdbPath = imdbId.startsWith('nm') ? 'name' : 'title';
+    links.imdb = `https://www.imdb.com/${imdbPath}/${imdbId}`;
+  }
+  if (wikidataId) links.wikidata = `https://www.wikidata.org/wiki/${wikidataId}`;
+  if (facebookId) links.facebook = `https://www.facebook.com/${facebookId}`;
+  if (instagramId) links.instagram = `https://www.instagram.com/${instagramId}`;
+  if (twitterId) links.twitter = `https://x.com/${twitterId}`;
+  if (tiktokId) links.tiktok = `https://www.tiktok.com/@${tiktokId}`;
+  if (youtubeId) links.youtube = `https://www.youtube.com/${youtubeId}`;
+
+  return links;
+}
+
+function normalizeWatchProviders(
+  results: Record<string, {
+    link: string;
+    flatrate?: Array<{ provider_id: number; provider_name: string; logo_path: string | null; display_priority: number }>;
+    rent?: Array<{ provider_id: number; provider_name: string; logo_path: string | null; display_priority: number }>;
+    buy?: Array<{ provider_id: number; provider_name: string; logo_path: string | null; display_priority: number }>;
+    ads?: Array<{ provider_id: number; provider_name: string; logo_path: string | null; display_priority: number }>;
+    free?: Array<{ provider_id: number; provider_name: string; logo_path: string | null; display_priority: number }>;
+  }>,
+  region?: string,
+): Record<string, unknown> | undefined {
+  const imageBaseUrl = getImageBaseUrl();
+  const selectedEntries = region ? Object.entries(results).filter(([country]) => country === region.toUpperCase()) : Object.entries(results);
+  if (selectedEntries.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(selectedEntries.map(([country, providers]) => [
+    country,
+    {
+      link: providers.link,
+      flatrate: providers.flatrate?.map((provider) => ({ ...provider, logo_url: buildImageUrl(imageBaseUrl, provider.logo_path, 'w185') })),
+      rent: providers.rent?.map((provider) => ({ ...provider, logo_url: buildImageUrl(imageBaseUrl, provider.logo_path, 'w185') })),
+      buy: providers.buy?.map((provider) => ({ ...provider, logo_url: buildImageUrl(imageBaseUrl, provider.logo_path, 'w185') })),
+      ads: providers.ads?.map((provider) => ({ ...provider, logo_url: buildImageUrl(imageBaseUrl, provider.logo_path, 'w185') })),
+      free: providers.free?.map((provider) => ({ ...provider, logo_url: buildImageUrl(imageBaseUrl, provider.logo_path, 'w185') })),
+    },
+  ]));
 }
 
 /**
@@ -527,6 +616,32 @@ export async function getTrending(
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error occurred';
     return createErrorResponse(`Failed to get trending: ${message}`);
+  }
+}
+
+export async function multiSearch(
+  client: TMDBClient,
+  args: z.infer<typeof multiSearchSchema>
+): Promise<ToolResult> {
+  try {
+    const result = await client.multiSearch(args.query, {
+      page: args.page,
+      language: args.language,
+      includeAdult: args.include_adult,
+    });
+
+    const imageBaseUrl = getImageBaseUrl();
+    return createSuccessResponse({
+      ...result,
+      results: result.results.map((item) => ({
+        ...item,
+        poster_url: buildImageUrl(imageBaseUrl, 'poster_path' in item ? item.poster_path : null),
+        backdrop_url: buildImageUrl(imageBaseUrl, 'backdrop_path' in item ? item.backdrop_path : null),
+        profile_url: buildImageUrl(imageBaseUrl, 'profile_path' in item ? item.profile_path : null),
+      })),
+    });
+  } catch (error) {
+    return createErrorResponse(`Failed to multi search TMDB: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
@@ -1034,6 +1149,102 @@ export async function discoverTVShows(client: TMDBClient, args: z.infer<typeof d
   }
 }
 
+export async function getMovieWatchProviders(client: TMDBClient, args: z.infer<typeof getMovieWatchProvidersSchema>): Promise<ToolResult> {
+  try {
+    const result = await client.getMovieWatchProviders(args.movie_id);
+    const providers = normalizeWatchProviders(result.results, args.region);
+    if (!providers) {
+      return createErrorResponse(`No watch provider data found for region: ${args.region}`);
+    }
+
+    return createSuccessResponse({
+      id: result.id,
+      region: args.region?.toUpperCase() || null,
+      results: providers,
+    });
+  } catch (error) {
+    return createErrorResponse(`Failed to get movie watch providers: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function getTVWatchProviders(client: TMDBClient, args: z.infer<typeof getTVWatchProvidersSchema>): Promise<ToolResult> {
+  try {
+    const result = await client.getTVWatchProviders(args.tv_id);
+    const providers = normalizeWatchProviders(result.results, args.region);
+    if (!providers) {
+      return createErrorResponse(`No watch provider data found for region: ${args.region}`);
+    }
+
+    return createSuccessResponse({
+      id: result.id,
+      region: args.region?.toUpperCase() || null,
+      results: providers,
+    });
+  } catch (error) {
+    return createErrorResponse(`Failed to get TV watch providers: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function getMovieExternalIds(client: TMDBClient, args: z.infer<typeof getMovieExternalIdsSchema>): Promise<ToolResult> {
+  try {
+    const result = await client.getMovieExternalIds(args.movie_id);
+    return createSuccessResponse({
+      ...result,
+      links: buildExternalLinks(result),
+    });
+  } catch (error) {
+    return createErrorResponse(`Failed to get movie external IDs: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function getTVExternalIds(client: TMDBClient, args: z.infer<typeof getTVExternalIdsSchema>): Promise<ToolResult> {
+  try {
+    const result = await client.getTVExternalIds(args.tv_id);
+    return createSuccessResponse({
+      ...result,
+      links: buildExternalLinks(result),
+    });
+  } catch (error) {
+    return createErrorResponse(`Failed to get TV external IDs: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function getPersonExternalIds(client: TMDBClient, args: z.infer<typeof getPersonExternalIdsSchema>): Promise<ToolResult> {
+  try {
+    const result = await client.getPersonExternalIds(args.person_id);
+    return createSuccessResponse({
+      ...result,
+      links: buildExternalLinks(result),
+    });
+  } catch (error) {
+    return createErrorResponse(`Failed to get person external IDs: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function getMovieGenres(client: TMDBClient): Promise<ToolResult> {
+  try {
+    const result = await client.getGenres('movie');
+    return createSuccessResponse({
+      ...result,
+      count: result.genres.length,
+    });
+  } catch (error) {
+    return createErrorResponse(`Failed to get movie genres: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+export async function getTVGenres(client: TMDBClient): Promise<ToolResult> {
+  try {
+    const result = await client.getGenres('tv');
+    return createSuccessResponse({
+      ...result,
+      count: result.genres.length,
+    });
+  } catch (error) {
+    return createErrorResponse(`Failed to get TV genres: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
 // ============================================================================
 // Tool Registry
 // ============================================================================
@@ -1098,6 +1309,12 @@ export const TOOLS: ToolDefinition[] = [
     handler: (client, args) => getTrending(client, getTrendingSchema.parse(args)),
   },
   {
+    name: 'multi_search',
+    description: 'Search movies, TV shows, and people in a single request when you are not sure which TMDB media type matches the query.',
+    inputSchema: multiSearchSchema,
+    handler: (client, args) => multiSearch(client, multiSearchSchema.parse(args)),
+  },
+  {
     name: 'get_movie_recommendations',
     description: 'Get movie recommendations based on a specific movie. Returns similar movies that users who liked the given movie also enjoyed.',
     inputSchema: getMovieRecommendationsSchema,
@@ -1156,6 +1373,18 @@ export const TOOLS: ToolDefinition[] = [
     description: 'Get the most recently added movie to the TMDB database.',
     inputSchema: getLatestMovieSchema,
     handler: (client, args) => getLatestMovie(client, getLatestMovieSchema.parse(args)),
+  },
+  {
+    name: 'get_movie_watch_providers',
+    description: 'Get streaming, rental, and purchase availability for a movie by country/region.',
+    inputSchema: getMovieWatchProvidersSchema,
+    handler: (client, args) => getMovieWatchProviders(client, getMovieWatchProvidersSchema.parse(args)),
+  },
+  {
+    name: 'get_movie_external_ids',
+    description: 'Get external IDs and deep links for a movie such as IMDb and Wikidata.',
+    inputSchema: getMovieExternalIdsSchema,
+    handler: (client, args) => getMovieExternalIds(client, getMovieExternalIdsSchema.parse(args)),
   },
   {
     name: 'get_tv_recommendations',
@@ -1230,10 +1459,28 @@ export const TOOLS: ToolDefinition[] = [
     handler: (client, args) => getLatestTV(client, getLatestTVSchema.parse(args)),
   },
   {
+    name: 'get_tv_watch_providers',
+    description: 'Get streaming, rental, and purchase availability for a TV show by country/region.',
+    inputSchema: getTVWatchProvidersSchema,
+    handler: (client, args) => getTVWatchProviders(client, getTVWatchProvidersSchema.parse(args)),
+  },
+  {
+    name: 'get_tv_external_ids',
+    description: 'Get external IDs and deep links for a TV show such as IMDb, TVDB, and Wikidata.',
+    inputSchema: getTVExternalIdsSchema,
+    handler: (client, args) => getTVExternalIds(client, getTVExternalIdsSchema.parse(args)),
+  },
+  {
     name: 'get_person_images',
     description: 'Get all profile images for a person.',
     inputSchema: getPersonImagesSchema,
     handler: (client, args) => getPersonImages(client, getPersonImagesSchema.parse(args)),
+  },
+  {
+    name: 'get_person_external_ids',
+    description: 'Get external IDs and social profile IDs for a person.',
+    inputSchema: getPersonExternalIdsSchema,
+    handler: (client, args) => getPersonExternalIds(client, getPersonExternalIdsSchema.parse(args)),
   },
   {
     name: 'get_movie_certifications',
@@ -1252,5 +1499,17 @@ export const TOOLS: ToolDefinition[] = [
     description: 'Advanced TV show discovery with filters for genre, year, rating, and sorting.',
     inputSchema: discoverTVShowsSchema,
     handler: (client, args) => discoverTVShows(client, discoverTVShowsSchema.parse(args)),
+  },
+  {
+    name: 'get_movie_genres',
+    description: 'Get the reference list of TMDB movie genres and their IDs.',
+    inputSchema: getMovieGenresSchema,
+    handler: (client) => getMovieGenres(client),
+  },
+  {
+    name: 'get_tv_genres',
+    description: 'Get the reference list of TMDB TV genres and their IDs.',
+    inputSchema: getTVGenresSchema,
+    handler: (client) => getTVGenres(client),
   },
 ];

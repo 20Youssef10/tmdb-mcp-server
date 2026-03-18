@@ -17,10 +17,12 @@ export function initializeMCPServer(client: TMDBClient): McpServer {
   });
 
   for (const tool of TOOLS) {
-    server.tool(
+    server.registerTool(
       tool.name,
-      tool.description,
-      {} as Record<string, unknown>,
+      {
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+      },
       async (args: Record<string, unknown>) => {
         try {
           const result = await tool.handler(client, args);
