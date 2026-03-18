@@ -1,17 +1,31 @@
 /**
  * TMDB MCP Server for Cloudflare Workers
  * 
- * A production-ready Model Context Protocol (MCP) server that integrates
- * with The Movie Database (TMDB) API, designed to run on Cloudflare Workers
- * using Hono.js framework with SSE and Streamable HTTP transports.
+ * Simplified implementation that works with Cloudflare Workers runtime.
+ * Uses manual SSE implementation instead of MCP SDK transport.
  */
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { TMDBClient } from './lib/tmdb-client.js';
 import { TOOLS } from './lib/mcp-tools.js';
+
+// Cloudflare Workers global types
+declare const TextEncoder: { new(): { encode(input: string): Uint8Array } };
+declare const setInterval: (callback: () => void, ms: number) => number;
+declare const clearInterval: (id: number) => void;
+
+interface ReadableStreamDefaultController<T> {
+  enqueue(chunk: T): void;
+  close(): void;
+  error(e?: unknown): void;
+}
+
+interface HeadersInit {
+  [name: string]: string;
+}
+
+type BodyInit = unknown | string | Uint8Array | null;
 
 // Cloudflare Workers environment
 export interface Env {
@@ -23,42 +37,23 @@ export interface Env {
 // Global state
 const state = {
   client: null as TMDBClient | null,
-  mcpServer: null as McpServer | null,
-  transports: new Map<string, SSEServerTransport>(),
+  sessions: new Map<string, { id: string; createdAt: number }>(),
 };
 
-// Initialize MCP server
-function initializeMCPServer(client: TMDBClient): McpServer {
-  const server = new McpServer({
-    name: 'tmdb-mcp-server',
-    version: '1.0.0',
-    description: 'The Movie Database (TMDB) MCP Server',
+// Initialize TMDB client
+function initializeClient(env: Env): TMDBClient {
+  const client = new TMDBClient({
+    apiKey: env.TMDB_API_KEY,
+    baseUrl: env.TMDB_BASE_URL || 'https://api.themoviedb.org/3',
+    imageBaseUrl: env.TMDB_IMAGE_BASE_URL || 'https://image.tmdb.org/t/p',
   });
+  client.initializeCache();
+  return client;
+}
 
-  for (const tool of TOOLS) {
-    server.tool(
-      tool.name,
-      tool.description,
-      {} as Record<string, unknown>,
-      async (args: Record<string, unknown>) => {
-        try {
-          const result = await tool.handler(client, args);
-          return {
-            content: result.content.map((c) => ({ type: 'text' as const, text: c.text })),
-            isError: result.isError,
-          };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Unknown error';
-          return {
-            content: [{ type: 'text' as const, text: JSON.stringify({ error: message }, null, 2) }],
-            isError: true,
-          };
-        }
-      }
-    );
-  }
-
-  return server;
+// Generate unique ID
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
 }
 
 // Hono app
@@ -67,17 +62,17 @@ const app = new Hono<{ Bindings: Env }>();
 // CORS middleware
 app.use('*', cors());
 
-// Health check
+// Root endpoint
 app.get('/', (c) => {
   return c.json({
     name: 'tmdb-mcp-server',
     version: '1.0.0',
     status: 'running',
     tools_count: TOOLS.length,
-    transports: ['SSE', 'StreamableHTTP'],
   });
 });
 
+// Health check
 app.get('/health', (c) => {
   return c.json({
     status: 'healthy',
@@ -95,128 +90,291 @@ app.get('/tools', (c) => {
   });
 });
 
-// SSE endpoint
+// SSE endpoint - Manual implementation
 app.get('/sse', async (c) => {
-  // Check API key
   const apiKey = c.env.TMDB_API_KEY;
   if (!apiKey) {
-    return c.json(
-      { error: 'TMDB_API_KEY is not configured. Please set it in Cloudflare dashboard.' },
-      { status: 500 }
-    );
+    return c.json({ error: 'TMDB_API_KEY not configured' }, { status: 500 });
   }
 
-  // Initialize client if needed
+  // Initialize client
   if (!state.client) {
-    state.client = new TMDBClient({
-      apiKey,
-      baseUrl: c.env.TMDB_BASE_URL || 'https://api.themoviedb.org/3',
-      imageBaseUrl: c.env.TMDB_IMAGE_BASE_URL || 'https://image.tmdb.org/t/p',
-    });
-    await state.client.initializeCache();
-    state.mcpServer = initializeMCPServer(state.client);
+    state.client = initializeClient(c.env);
   }
 
-  // Create SSE transport
-  const transport = new SSEServerTransport('/message', c.res);
-  state.transports.set(transport.sessionId, transport);
-
-  // Connect MCP server
-  if (state.mcpServer) {
-    await state.mcpServer.connect(transport);
-  }
+  // Create session
+  const sessionId = generateId();
+  state.sessions.set(sessionId, { id: sessionId, createdAt: Date.now() });
 
   // Set SSE headers
   c.header('Content-Type', 'text/event-stream');
   c.header('Cache-Control', 'no-cache');
   c.header('Connection', 'keep-alive');
+  c.header('X-Session-Id', sessionId);
 
-  // Send the stream (cast to bypass strict typing)
-  await (transport.send as unknown as (c: unknown) => Promise<void>)(c);
+  // Create SSE stream using global ReadableStream
+  const encoder = new TextEncoder();
+  let pingInterval: number | null = null;
 
-  // Cleanup on disconnect
-  state.transports.delete(transport.sessionId);
+  const stream = new (globalThis as any).ReadableStream({
+    start(controller: ReadableStreamDefaultController<Uint8Array>) {
+      // Send initial endpoint event with session ID
+      const endpointEvent = `event: endpoint\ndata: ${JSON.stringify({ endpoint: `/message?sessionId=${sessionId}` })}\n\n`;
+      controller.enqueue(encoder.encode(endpointEvent));
 
-  return c.res;
+      // Send ping every 30 seconds to keep connection alive
+      pingInterval = setInterval(() => {
+        controller.enqueue(encoder.encode(': ping\n\n'));
+      }, 30000);
+    },
+    cancel() {
+      if (pingInterval) {
+        clearInterval(pingInterval);
+      }
+      state.sessions.delete(sessionId);
+    },
+  });
+
+  return new (globalThis as any).Response(stream as BodyInit, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Session-Id': sessionId,
+    } as HeadersInit,
+  });
 });
 
-// Message endpoint for SSE
+// Message endpoint - Handle JSON-RPC
 app.post('/message', async (c) => {
-  if (!state.mcpServer) {
-    return c.json(
-      { error: 'Server not initialized. Connect to /sse first.' },
-      { status: 503 }
-    );
-  }
-
-  try {
-    const body = await c.req.json();
-    const sessionId = c.req.query('sessionId');
-
-    if (!sessionId) {
-      return c.json({ error: 'sessionId query parameter is required' }, { status: 400 });
-    }
-
-    const transport = state.transports.get(sessionId);
-    if (!transport) {
-      return c.json({ error: `Session ${sessionId} not found` }, { status: 404 });
-    }
-
-    await transport.handlePostMessage(c.req.raw, body as object, state.mcpServer);
-    return c.json({ status: 'processed' });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return c.json({ error: `Message processing failed: ${message}` }, { status: 400 });
-  }
-});
-
-// Streamable HTTP endpoint (POST)
-app.post('/mcp', async (c) => {
-  // Check API key
   const apiKey = c.env.TMDB_API_KEY;
   if (!apiKey) {
-    return c.json(
-      { error: 'TMDB_API_KEY is not configured. Please set it in Cloudflare dashboard.' },
-      { status: 500 }
-    );
+    return c.json({ error: 'TMDB_API_KEY not configured' }, { status: 500 });
   }
 
-  // Initialize if needed
+  // Initialize client if needed
   if (!state.client) {
-    state.client = new TMDBClient({
-      apiKey,
-      baseUrl: c.env.TMDB_BASE_URL || 'https://api.themoviedb.org/3',
-      imageBaseUrl: c.env.TMDB_IMAGE_BASE_URL || 'https://image.tmdb.org/t/p',
-    });
-    await state.client.initializeCache();
-    state.mcpServer = initializeMCPServer(state.client);
+    state.client = initializeClient(c.env);
+  }
+
+  const sessionId = c.req.query('sessionId');
+  if (!sessionId) {
+    return c.json({ error: 'sessionId is required' }, { status: 400 });
+  }
+
+  const session = state.sessions.get(sessionId);
+  if (!session) {
+    return c.json({ error: 'Session not found' }, { status: 404 });
   }
 
   try {
     const body = await c.req.json();
-    // Process MCP message directly
-    if (state.mcpServer) {
-      // For simple request/response, we can handle it inline
+    const message = body as {
+      jsonrpc: '2.0';
+      method: string;
+      params?: unknown;
+      id: string | number;
+    };
+
+    // Handle MCP protocol messages
+    if (message.method === 'initialize') {
       return c.json({
         jsonrpc: '2.0',
-        result: { message: 'Request received', method: (body as { method?: string }).method },
-        id: (body as { id?: string | number }).id,
+        id: message.id,
+        result: {
+          protocolVersion: '2024-11-05',
+          capabilities: {
+            tools: {},
+          },
+          serverInfo: {
+            name: 'tmdb-mcp-server',
+            version: '1.0.0',
+          },
+        },
       });
     }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return c.json({ error: `MCP request failed: ${message}` }, { status: 400 });
-  }
 
-  return c.json({ status: 'processed' });
+    if (message.method === 'initialized') {
+      // Client acknowledges initialization
+      return c.json({ jsonrpc: '2.0', id: message.id, result: {} });
+    }
+
+    if (message.method === 'tools/list') {
+      return c.json({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          tools: TOOLS.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: zodSchemaToJsonSchema(tool.inputSchema),
+          })),
+        },
+      });
+    }
+
+    if (message.method === 'tools/call') {
+      const params = message.params as { name: string; arguments?: Record<string, unknown> };
+      const tool = TOOLS.find((t) => t.name === params.name);
+
+      if (!tool) {
+        return c.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          error: { code: -32601, message: `Tool not found: ${params.name}` },
+        });
+      }
+
+      try {
+        const result = await tool.handler(state.client, params.arguments || {});
+        return c.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            content: result.content,
+            isError: result.isError,
+          },
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        return c.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            content: [{ type: 'text', text: JSON.stringify({ error: errorMessage }) }],
+            isError: true,
+          },
+        });
+      }
+    }
+
+    // Unknown method
+    return c.json({
+      jsonrpc: '2.0',
+      id: message.id,
+      error: { code: -32601, message: `Method not found: ${message.method}` },
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32700, message: `Parse error: ${errorMessage}` },
+    });
+  }
 });
 
-// Streamable HTTP endpoint (GET)
+// Streamable HTTP endpoint
+app.post('/mcp', async (c) => {
+  const apiKey = c.env.TMDB_API_KEY;
+  if (!apiKey) {
+    return c.json({ error: 'TMDB_API_KEY not configured' }, { status: 500 });
+  }
+
+  if (!state.client) {
+    state.client = initializeClient(c.env);
+  }
+
+  try {
+    const body = await c.req.json();
+    const message = body as {
+      jsonrpc: '2.0';
+      method: string;
+      params?: unknown;
+      id: string | number;
+    };
+
+    // Handle initialize
+    if (message.method === 'initialize') {
+      return c.json({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          protocolVersion: '2024-11-05',
+          capabilities: {
+            tools: {},
+          },
+          serverInfo: {
+            name: 'tmdb-mcp-server',
+            version: '1.0.0',
+          },
+        },
+      });
+    }
+
+    if (message.method === 'tools/list') {
+      return c.json({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: {
+          tools: TOOLS.map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: zodSchemaToJsonSchema(tool.inputSchema),
+          })),
+        },
+      });
+    }
+
+    if (message.method === 'tools/call') {
+      const params = message.params as { name: string; arguments?: Record<string, unknown> };
+      const tool = TOOLS.find((t) => t.name === params.name);
+
+      if (!tool) {
+        return c.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          error: { code: -32601, message: `Tool not found: ${params.name}` },
+        });
+      }
+
+      try {
+        const result = await tool.handler(state.client, params.arguments || {});
+        return c.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            content: result.content,
+            isError: result.isError,
+          },
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        return c.json({
+          jsonrpc: '2.0',
+          id: message.id,
+          result: {
+            content: [{ type: 'text', text: JSON.stringify({ error: errorMessage }) }],
+            isError: true,
+          },
+        });
+      }
+    }
+
+    return c.json({
+      jsonrpc: '2.0',
+      id: message.id,
+      error: { code: -32601, message: `Method not found: ${message.method}` },
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return c.json({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32700, message: `Parse error: ${errorMessage}` },
+    });
+  }
+});
+
+// GET /mcp for capabilities
 app.get('/mcp', (c) => {
   return c.json({
     name: 'tmdb-mcp-server',
     version: '1.0.0',
-    capabilities: { tools: true },
+    protocolVersion: '2024-11-05',
+    capabilities: {
+      tools: {},
+    },
     tools_count: TOOLS.length,
   });
 });
@@ -227,10 +385,69 @@ app.onError((err, c) => {
     {
       error: 'Server error',
       message: err.message,
-      type: err.constructor.name,
     },
     { status: 500 }
   );
 });
+
+// Simple Zod to JSON Schema converter
+function zodSchemaToJsonSchema(schema: unknown): Record<string, unknown> {
+  if (schema && typeof schema === 'object' && '_def' in schema) {
+    const zodSchema = schema as Record<string, unknown>;
+    const def = zodSchema._def as Record<string, unknown>;
+
+    if (def.typeName === 'ZodObject') {
+      const shape = def.shape as Record<string, unknown>;
+      const properties: Record<string, unknown> = {};
+      const required: string[] = [];
+
+      for (const [key, value] of Object.entries(shape)) {
+        const fieldDef = value as Record<string, unknown>;
+        const fieldTypeDef = fieldDef._def as Record<string, unknown>;
+
+        let type = 'string';
+        if (fieldTypeDef.typeName === 'ZodNumber') {
+          type = 'number';
+        } else if (fieldTypeDef.typeName === 'ZodBoolean') {
+          type = 'boolean';
+        } else if (fieldTypeDef.typeName === 'ZodEnum') {
+          type = 'string';
+        }
+
+        const description = fieldDef.description as string | undefined;
+        let enumValues: string[] | undefined;
+        if (fieldTypeDef.typeName === 'ZodEnum') {
+          enumValues = fieldTypeDef.values as string[];
+        }
+
+        const isOptional =
+          fieldTypeDef.typeName === 'ZodOptional' || fieldTypeDef.typeName === 'ZodDefault';
+
+        properties[key] = {
+          type,
+          ...(description && { description }),
+          ...(enumValues && { enum: enumValues }),
+        };
+
+        if (!isOptional) {
+          required.push(key);
+        }
+      }
+
+      return {
+        type: 'object',
+        properties,
+        required,
+        additionalProperties: false,
+      };
+    }
+  }
+
+  return {
+    type: 'object',
+    properties: {},
+    additionalProperties: true,
+  };
+}
 
 export default app;
