@@ -9,10 +9,6 @@ compatibility_flags = ["nodejs_compat"]
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE_URL = "https://image.tmdb.org/t/p"
 
-# Caching configuration
-[assets]
-directory = "./public"
-
 # Development settings
 [dev]
 port = 8787
