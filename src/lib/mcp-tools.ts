@@ -1112,7 +1112,10 @@ export async function getPersonImages(client: TMDBClient, args: z.infer<typeof g
 export async function getMovieCertifications(client: TMDBClient): Promise<ToolResult> {
   try {
     const result = await client.getMovieCertifications();
-    return createSuccessResponse(result);
+    return createSuccessResponse({
+      ...result,
+      count: Object.keys(result.certifications).length,
+    });
   } catch (error) {
     return createErrorResponse(`Failed to get movie certifications: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
@@ -1121,7 +1124,10 @@ export async function getMovieCertifications(client: TMDBClient): Promise<ToolRe
 export async function getTVCertifications(client: TMDBClient): Promise<ToolResult> {
   try {
     const result = await client.getTVCertifications();
-    return createSuccessResponse(result);
+    return createSuccessResponse({
+      ...result,
+      count: Object.keys(result.certifications).length,
+    });
   } catch (error) {
     return createErrorResponse(`Failed to get TV certifications: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }

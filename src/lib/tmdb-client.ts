@@ -1079,14 +1079,14 @@ export class TMDBClient {
   /**
    * Get certifications for movies.
    */
-  async getMovieCertifications(): Promise<{ results: Record<string, Array<{ certification: string; meaning: string; order: number }>> }> {
+  async getMovieCertifications(): Promise<{ certifications: Record<string, Array<{ certification: string; meaning: string; order: number }>> }> {
     return this.fetch('/certification/movie/list');
   }
 
   /**
    * Get certifications for TV shows.
    */
-  async getTVCertifications(): Promise<{ results: Record<string, Array<{ certification: string; meaning: string; order: number }>> }> {
+  async getTVCertifications(): Promise<{ certifications: Record<string, Array<{ certification: string; meaning: string; order: number }>> }> {
     return this.fetch('/certification/tv/list');
   }
 }

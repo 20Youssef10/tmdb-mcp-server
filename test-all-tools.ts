@@ -180,11 +180,11 @@ const tests: Test[] = [
   }},
   { name: 'get_movie_certifications', fn: async () => {
     const r = await client.getMovieCertifications();
-    console.log(`✅ ${Object.keys(r.results).length} countries with certifications`);
+    console.log(`✅ ${Object.keys(r.certifications).length} countries with certifications`);
   }},
   { name: 'get_tv_certifications', fn: async () => {
     const r = await client.getTVCertifications();
-    console.log(`✅ ${Object.keys(r.results).length} countries with TV certifications`);
+    console.log(`✅ ${Object.keys(r.certifications).length} countries with TV certifications`);
   }},
   { name: 'get_movie_genres', fn: async () => {
     const r = await client.getGenres('movie');
